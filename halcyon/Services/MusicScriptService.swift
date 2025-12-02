@@ -151,25 +151,9 @@ class MusicScriptService {
                                   set nm to name of p
                                   set pid to (persistent ID of p)
 
-                                  -- Get earliest track date as proxy for playlist creation date
+                                  -- Skip date calculation for fast initial load
+                                  -- Dates are fetched lazily when needed for sorting
                                   set dateStr to ""
-                                  try
-                                      set trackList to every track of p
-                                      if (count of trackList) > 0 then
-                                          set earliestDate to missing value
-                                          repeat with tr in trackList
-                                              try
-                                                  set tDate to date added of tr
-                                                  if earliestDate is missing value or tDate comes before earliestDate then
-                                                      set earliestDate to tDate
-                                                  end if
-                                              end try
-                                          end repeat
-                                          if earliestDate is not missing value then
-                                              set dateStr to earliestDate as text
-                                          end if
-                                      end if
-                                  end try
 
                                   try
                                       set parentName to name of (parent of p)
@@ -269,6 +253,84 @@ class MusicScriptService {
         return (rootList, folderGroups)
     }
 
+    // MARK: - Lazy date fetching for sorting
+
+    /// Batch fetch dates for multiple playlists (uses first track date as proxy)
+    /// Returns dictionary mapping playlist ID to date string
+    func getPlaylistDates(ids: [String]) throws -> [String: String] {
+        guard !ids.isEmpty else { return [:] }
+
+        // Build AppleScript array of IDs
+        let idsLiteral = ids.map { "\"\(escapeAS($0))\"" }.joined(separator: ", ")
+
+        let script = """
+        try
+            if application id "com.apple.Music" is not running then
+                do shell script "open -b com.apple.Music"
+            end if
+        end try
+        repeat with i from 1 to 50
+            if application id "com.apple.Music" is running then exit repeat
+            delay 0.1
+        end repeat
+
+        try
+            tell application id "com.apple.Music"
+                with timeout of 30 seconds
+                    set targetIDs to {\(idsLiteral)}
+                    set results to {}
+
+                    repeat with pid in targetIDs
+                        try
+                            set targetPlaylist to first user playlist whose persistent ID is pid
+                            set dateStr to ""
+                            try
+                                set firstTrack to first track of targetPlaylist
+                                set dateStr to (date added of firstTrack) as text
+                            end try
+                            set end of results to {pid, dateStr}
+                        on error
+                            set end of results to {pid, ""}
+                        end try
+                    end repeat
+
+                    return results
+                end timeout
+            end tell
+        on error errMsg number errNum
+            error errMsg number errNum
+        end try
+        """
+
+        guard let result = executeScript(script) else {
+            if let errorNum = (lastAppleScriptError?[NSAppleScript.errorNumber] as? NSNumber)?.intValue {
+                switch errorNum {
+                case -1743, -10004:
+                    throw MusicScriptError.permissionDenied
+                case -600, -10810:
+                    throw MusicScriptError.musicAppNotRunning
+                default:
+                    break
+                }
+            }
+            throw MusicScriptError.scriptExecutionFailed("Could not fetch playlist dates")
+        }
+
+        // Parse result: array of [id, dateStr] pairs
+        var dateMap: [String: String] = [:]
+        if let pairs = result as? [[Any]] {
+            for pair in pairs {
+                if pair.count >= 2,
+                   let pid = pair[0] as? String,
+                   let dateStr = pair[1] as? String {
+                    dateMap[pid] = dateStr
+                }
+            }
+        }
+
+        return dateMap
+    }
+
     // MARK: - Get playlists in a specific folder
 
     // Returns list of playlist names
@@ -356,7 +418,8 @@ class MusicScriptService {
 
     // MARK: - Create playlist
 
-    func createPlaylist(named name: String, inFolder folderName: String?) throws {
+    /// Creates a playlist and returns its persistent ID
+    func createPlaylist(named name: String, inFolder folderName: String?) throws -> String {
         let safeName = escapeAS(name)
         let script = """
         -- Ensure Music is running and ready (max ~5s)
@@ -378,6 +441,7 @@ class MusicScriptService {
                         set targetFolder to folder playlist "\(escapeAS(folderName!))"
                         move newPlaylist to targetFolder
                     end if
+                    return persistent ID of newPlaylist
                 end timeout
             end tell
         on error errMsg number errNum
@@ -385,7 +449,7 @@ class MusicScriptService {
         end try
         """
 
-        guard executeScript(script) != nil else {
+        guard let result = executeScript(script), let persistentID = result as? String else {
             if let errorNum = (lastAppleScriptError?[NSAppleScript.errorNumber] as? NSNumber)?.intValue {
                 switch errorNum {
                 case -1743, -10004:
@@ -398,6 +462,8 @@ class MusicScriptService {
             }
             throw MusicScriptError.scriptExecutionFailed("Could not create playlist: \(name)")
         }
+
+        return persistentID
     }
 
     // MARK: - Create folder

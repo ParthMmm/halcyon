@@ -153,7 +153,68 @@ class MusicLibraryViewModel: ObservableObject {
              return
          }
 
-         var updatedPlaylists = folder.playlists
+         // Check if date-based sorting needs dates to be fetched
+         let needsDateSort = (sortOption == .newestFirst || sortOption == .oldestFirst)
+         let playlistsMissingDates = folder.playlists.filter { $0.dateAdded == nil }
+
+         if needsDateSort && !playlistsMissingDates.isEmpty {
+             // Fetch dates lazily then apply sort
+             fetchDatesAndSort(folderIndex: folderIndex, sortOption: sortOption)
+             return
+         }
+
+         // Apply sort immediately (dates already available or not needed)
+         applySortToFolder(folderIndex: folderIndex, sortOption: sortOption)
+     }
+
+     /// Fetch dates for playlists missing them, then apply date-based sort
+     private func fetchDatesAndSort(folderIndex: Int, sortOption: PlaylistSortOption) {
+         let folder = allFolders[folderIndex]
+         let idsToFetch = folder.playlists.filter { $0.dateAdded == nil }.map { $0.id }
+
+         guard !idsToFetch.isEmpty else {
+             applySortToFolder(folderIndex: folderIndex, sortOption: sortOption)
+             return
+         }
+
+         isLoading = true
+         let service = musicService
+
+         Task { [weak self] in
+             guard let self else { return }
+             do {
+                 let dateMap = try await service.getPlaylistDates(ids: idsToFetch)
+
+                 DispatchQueue.main.async {
+                     // Update playlists with fetched dates
+                     for i in 0..<self.allFolders[folderIndex].playlists.count {
+                         let playlist = self.allFolders[folderIndex].playlists[i]
+                         if let dateStr = dateMap[playlist.id], !dateStr.isEmpty {
+                             self.allFolders[folderIndex].playlists[i].dateAdded = service.parseAppleScriptDate(dateStr)
+                         }
+                     }
+
+                     // Update selected folder if needed
+                     if self.selectedFolder?.id == self.allFolders[folderIndex].id {
+                         self.selectedFolder = self.allFolders[folderIndex]
+                     }
+
+                     // Now apply the sort
+                     self.applySortToFolder(folderIndex: folderIndex, sortOption: sortOption)
+                     self.isLoading = false
+                 }
+             } catch {
+                 DispatchQueue.main.async {
+                     self.errorMessage = "Failed to fetch playlist dates: \(error.localizedDescription)"
+                     self.isLoading = false
+                 }
+             }
+         }
+     }
+
+     /// Apply sorting to a folder's playlists (assumes dates are available if needed)
+     private func applySortToFolder(folderIndex: Int, sortOption: PlaylistSortOption) {
+         var updatedPlaylists = allFolders[folderIndex].playlists
 
          switch sortOption {
          case .alphabetical:
@@ -162,33 +223,29 @@ class MusicLibraryViewModel: ObservableObject {
              updatedPlaylists.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
          case .newestFirst:
              updatedPlaylists.sort { (p1, p2) in
-                 // Playlists with dates come first, then sort by date descending
                  switch (p1.dateAdded, p2.dateAdded) {
                  case (.some(let d1), .some(let d2)): return d1 > d2
-                 case (.some, .none): return true   // Dated playlists before undated
+                 case (.some, .none): return true
                  case (.none, .some): return false
-                 case (.none, .none): return false  // Keep original order for both nil
+                 case (.none, .none): return false
                  }
              }
          case .oldestFirst:
              updatedPlaylists.sort { (p1, p2) in
-                 // Playlists with dates come first, then sort by date ascending
                  switch (p1.dateAdded, p2.dateAdded) {
                  case (.some(let d1), .some(let d2)): return d1 < d2
-                 case (.some, .none): return true   // Dated playlists before undated
+                 case (.some, .none): return true
                  case (.none, .some): return false
-                 case (.none, .none): return false  // Keep original order for both nil
+                 case (.none, .none): return false
                  }
              }
          case .default:
-             // Keep original order from Music app (no sorting)
              break
          }
 
          allFolders[folderIndex].playlists = updatedPlaylists
 
-         // Update selected folder
-         if selectedFolder?.id == folder.id {
+         if selectedFolder?.id == allFolders[folderIndex].id {
              selectedFolder = allFolders[folderIndex]
          }
      }
@@ -238,10 +295,25 @@ class MusicLibraryViewModel: ObservableObject {
          Task { [weak self, name, folderName] in
              guard let self else { return }
              do {
-                 try await musicService.createPlaylist(named: name, inFolder: folderName)
+                 let newID = try await musicService.createPlaylist(named: name, inFolder: folderName)
                  DispatchQueue.main.async {
+                     // Optimistic local update - add playlist to local state
+                     let newPlaylist = Playlist(id: newID, name: name, dateAdded: nil)
+
+                     if let folderName = folderName {
+                         // Add to specific folder
+                         if let folderIndex = self.allFolders.firstIndex(where: { $0.name == folderName }) {
+                             self.allFolders[folderIndex].playlists.append(newPlaylist)
+                             if self.selectedFolder?.id == self.allFolders[folderIndex].id {
+                                 self.selectedFolder = self.allFolders[folderIndex]
+                             }
+                         }
+                     } else {
+                         // Add to root playlists
+                         self.rootPlaylists.append(newPlaylist)
+                     }
+
                      self.isLoading = false
-                     self.loadFolders() // Refresh to show new playlist
                  }
              } catch let error as MusicScriptError {
                  DispatchQueue.main.async {
@@ -266,8 +338,10 @@ class MusicLibraryViewModel: ObservableObject {
              do {
                  try await musicService.createFolder(named: name)
                 DispatchQueue.main.async {
+                    // Optimistic local update - add folder to local state
+                    let newFolder = Folder(name: name, playlists: [])
+                    self.allFolders.append(newFolder)
                     self.isLoading = false
-                    self.loadFolders() // Refresh to show new folder
                 }
             } catch let error as MusicScriptError {
                 DispatchQueue.main.async {
@@ -287,13 +361,28 @@ class MusicLibraryViewModel: ObservableObject {
          isLoading = true
          errorMessage = nil
 
-         Task { [weak self, playlist, newName] in
+         Task { [weak self, playlist, newName, folderName] in
              guard let self else { return }
              do {
                  try await musicService.renamePlaylist(id: playlist.id, to: newName)
                 DispatchQueue.main.async {
+                    // Optimistic local update - rename playlist in local state
+                    if folderName.isEmpty {
+                        // Root playlist
+                        if let index = self.rootPlaylists.firstIndex(where: { $0.id == playlist.id }) {
+                            self.rootPlaylists[index].name = newName
+                        }
+                    } else {
+                        // Folder playlist
+                        if let folderIndex = self.allFolders.firstIndex(where: { $0.name == folderName }),
+                           let playlistIndex = self.allFolders[folderIndex].playlists.firstIndex(where: { $0.id == playlist.id }) {
+                            self.allFolders[folderIndex].playlists[playlistIndex].name = newName
+                            if self.selectedFolder?.id == self.allFolders[folderIndex].id {
+                                self.selectedFolder = self.allFolders[folderIndex]
+                            }
+                        }
+                    }
                     self.isLoading = false
-                    self.loadFolders() // Refresh to show renamed playlist
                 }
             } catch let error as MusicScriptError {
                 DispatchQueue.main.async {
@@ -340,13 +429,32 @@ class MusicLibraryViewModel: ObservableObject {
          isLoading = true
          errorMessage = nil
 
-         Task { [weak self, playlist, destinationFolder] in
+         Task { [weak self, playlist, sourceFolder, destinationFolder] in
              guard let self else { return }
              do {
                  try await musicService.movePlaylist(id: playlist.id, toFolder: destinationFolder)
                 DispatchQueue.main.async {
+                    // Optimistic local update - move playlist between folders
+
+                    // Remove from source
+                    if sourceFolder.isEmpty {
+                        self.rootPlaylists.removeAll { $0.id == playlist.id }
+                    } else if let sourceIndex = self.allFolders.firstIndex(where: { $0.name == sourceFolder }) {
+                        self.allFolders[sourceIndex].playlists.removeAll { $0.id == playlist.id }
+                        if self.selectedFolder?.id == self.allFolders[sourceIndex].id {
+                            self.selectedFolder = self.allFolders[sourceIndex]
+                        }
+                    }
+
+                    // Add to destination
+                    if let destIndex = self.allFolders.firstIndex(where: { $0.name == destinationFolder }) {
+                        self.allFolders[destIndex].playlists.append(playlist)
+                        if self.selectedFolder?.id == self.allFolders[destIndex].id {
+                            self.selectedFolder = self.allFolders[destIndex]
+                        }
+                    }
+
                     self.isLoading = false
-                    self.loadFolders() // Refresh to show moved playlist
                 }
             } catch let error as MusicScriptError {
                 DispatchQueue.main.async {
