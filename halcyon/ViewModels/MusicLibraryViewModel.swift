@@ -101,14 +101,18 @@ class MusicLibraryViewModel: ObservableObject {
                  let (rootList, folderGroups) = try await service.getAllFoldersWithPlaylists()
                  print("Retrieved \(rootList.count) root playlists and \(folderGroups.count) folders")
 
-                 // Build folders from folder groups (with persistent IDs)
+                 // Build folders from folder groups (with persistent IDs and dates)
                  let builtFolders = folderGroups.map { (fname, entries) in
                      print("Folder '\(fname)': \(entries.count) playlists")
-                     return Folder(name: fname, playlists: entries.map { Playlist(id: $0.1, name: $0.0) })
+                     return Folder(name: fname, playlists: entries.map {
+                         Playlist(id: $0.1, name: $0.0, dateAdded: service.parseAppleScriptDate($0.2))
+                     })
                  }
 
-                 // Build root playlists with persistent IDs
-                 let builtRootPlaylists = rootList.map { Playlist(id: $0.1, name: $0.0) }
+                 // Build root playlists with persistent IDs and dates
+                 let builtRootPlaylists = rootList.map {
+                     Playlist(id: $0.1, name: $0.0, dateAdded: service.parseAppleScriptDate($0.2))
+                 }
                  print("Built \(builtRootPlaylists.count) root playlists")
 
                  DispatchQueue.main.async {
@@ -152,6 +156,26 @@ class MusicLibraryViewModel: ObservableObject {
              updatedPlaylists.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
          case .reverseAlphabetical:
              updatedPlaylists.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
+         case .newestFirst:
+             updatedPlaylists.sort { (p1, p2) in
+                 // Playlists with dates come first, then sort by date descending
+                 switch (p1.dateAdded, p2.dateAdded) {
+                 case (.some(let d1), .some(let d2)): return d1 > d2
+                 case (.some, .none): return true   // Dated playlists before undated
+                 case (.none, .some): return false
+                 case (.none, .none): return false  // Keep original order for both nil
+                 }
+             }
+         case .oldestFirst:
+             updatedPlaylists.sort { (p1, p2) in
+                 // Playlists with dates come first, then sort by date ascending
+                 switch (p1.dateAdded, p2.dateAdded) {
+                 case (.some(let d1), .some(let d2)): return d1 < d2
+                 case (.some, .none): return true   // Dated playlists before undated
+                 case (.none, .some): return false
+                 case (.none, .none): return false  // Keep original order for both nil
+                 }
+             }
          case .default:
              // Keep original order from Music app (no sorting)
              break
@@ -170,20 +194,25 @@ class MusicLibraryViewModel: ObservableObject {
     // no-op helper removed (calls stay on main actor)
 
      func refreshPlaylists(for folder: Folder) {
+          let service = musicService
           Task { [weak self, folder] in
               guard let self else { return }
               do {
-                  let (rootList, folderGroups) = try await musicService.getAllFoldersWithPlaylists()
+                  let (rootList, folderGroups) = try await service.getAllFoldersWithPlaylists()
 
-                  // Update root playlists
-                  let updatedRootPlaylists = rootList.map { Playlist(id: $0.1, name: $0.0) }
+                  // Update root playlists with dates
+                  let updatedRootPlaylists = rootList.map {
+                      Playlist(id: $0.1, name: $0.0, dateAdded: service.parseAppleScriptDate($0.2))
+                  }
                   DispatchQueue.main.async {
                       self.rootPlaylists = updatedRootPlaylists
                   }
 
-                  // Update folder playlists
+                  // Update folder playlists with dates
                   let entries = folderGroups.first(where: { $0.0 == folder.name })?.1 ?? []
-                  let playlists = entries.map { Playlist(id: $0.1, name: $0.0) }
+                  let playlists = entries.map {
+                      Playlist(id: $0.1, name: $0.0, dateAdded: service.parseAppleScriptDate($0.2))
+                  }
                   DispatchQueue.main.async {
                       if let folderIndex = self.allFolders.firstIndex(where: { $0.id == folder.id }) {
                           self.allFolders[folderIndex].playlists = playlists
@@ -447,5 +476,7 @@ class MusicLibraryViewModel: ObservableObject {
 enum PlaylistSortOption: String, CaseIterable {
     case alphabetical = "A → Z"
     case reverseAlphabetical = "Z → A"
+    case newestFirst = "Newest First"
+    case oldestFirst = "Oldest First"
     case `default` = "Original Order"
 }

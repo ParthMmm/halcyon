@@ -121,8 +121,8 @@ class MusicScriptService {
 
      // MARK: - Get all folders with their user playlists (single pass)
 
-       // Returns: (rootPlaylists: [(name, persistentID)], folderGroups: [(folderName, [(name, persistentID)])])
-       func getAllFoldersWithPlaylists() throws -> ([(String, String)], [(String, [(String, String)])]) {
+       // Returns: (rootPlaylists: [(name, persistentID, dateString?)], folderGroups: [(folderName, [(name, persistentID, dateString?)])])
+       func getAllFoldersWithPlaylists() throws -> ([(String, String, String?)], [(String, [(String, String, String?)])]) {
          let script = """
          -- Ensure Music is running and wait until ready (max ~5s)
          try
@@ -137,35 +137,56 @@ class MusicScriptService {
 
          try
              tell application id "com.apple.Music"
-                 with timeout of 30 seconds
+                 with timeout of 60 seconds
                      -- Get all user playlists (flat list)
                      set allUserPlaylists to every user playlist
 
                       -- Collect root playlists and folder groups separately
-                      set rootRecs to {} -- list of {name, persistentId}
-                      set folderGroups to {} -- list of {folderName, { {name, persistentId} }}
+                      set rootRecs to {} -- list of {name, persistentId, dateStr}
+                      set folderGroups to {} -- list of {folderName, { {name, persistentId, dateStr} }}
 
                       repeat with p in allUserPlaylists
                           try
                               if (special kind of p) is none then
                                   set nm to name of p
                                   set pid to (persistent ID of p)
+
+                                  -- Get earliest track date as proxy for playlist creation date
+                                  set dateStr to ""
+                                  try
+                                      set trackList to every track of p
+                                      if (count of trackList) > 0 then
+                                          set earliestDate to missing value
+                                          repeat with tr in trackList
+                                              try
+                                                  set tDate to date added of tr
+                                                  if earliestDate is missing value or tDate comes before earliestDate then
+                                                      set earliestDate to tDate
+                                                  end if
+                                              end try
+                                          end repeat
+                                          if earliestDate is not missing value then
+                                              set dateStr to earliestDate as text
+                                          end if
+                                      end if
+                                  end try
+
                                   try
                                       set parentName to name of (parent of p)
                                       set foundGroup to false
                                       repeat with group in folderGroups
                                           if (item 1 of group) is parentName then
                                               set foundGroup to true
-                                              set end of (item 2 of group) to {nm, pid}
+                                              set end of (item 2 of group) to {nm, pid, dateStr}
                                               exit repeat
                                           end if
                                       end repeat
                                       if not foundGroup then
-                                          set end of folderGroups to {parentName, {{nm, pid}}}
+                                          set end of folderGroups to {parentName, {{nm, pid, dateStr}}}
                                       end if
                                   on error
                                       -- No parent -> root level
-                                      set end of rootRecs to {nm, pid}
+                                      set end of rootRecs to {nm, pid, dateStr}
                                   end try
                               end if
                           end try
@@ -200,26 +221,32 @@ class MusicScriptService {
             return ([], [])
         }
 
-        // First element: root playlists [{name, pid}]
-        var rootList: [(String, String)] = []
+        // First element: root playlists [{name, pid, dateStr}]
+        var rootList: [(String, String, String?)] = []
         if let rootArray = outer[0] as? [[Any]] {
             for rec in rootArray {
-                if rec.count >= 2, let nm = rec[0] as? String, let pid = rec[1] as? String {
-                    rootList.append((nm, pid))
+                if rec.count >= 2 {
+                    let nm = rec[0] as? String ?? ""
+                    let pid = rec[1] as? String ?? ""
+                    let dateStr: String? = rec.count >= 3 ? (rec[2] as? String) : nil
+                    rootList.append((nm, pid, dateStr))
                 }
             }
         }
 
-        // Second element: folder groups [{folderName, {{name,pid}...}}]
-        var folderGroups: [(String, [(String, String)])] = []
+        // Second element: folder groups [{folderName, {{name,pid,dateStr}...}}]
+        var folderGroups: [(String, [(String, String, String?)])] = []
         if let groups = outer[1] as? [[Any]] {
             for g in groups {
                 guard let fname = g.first as? String else { continue }
-                var entries: [(String, String)] = []
+                var entries: [(String, String, String?)] = []
                 if g.count > 1, let plist = g[1] as? [[Any]] {
                     for rec in plist {
-                        if rec.count >= 2, let nm = rec[0] as? String, let pid = rec[1] as? String {
-                            entries.append((nm, pid))
+                        if rec.count >= 2 {
+                            let nm = rec[0] as? String ?? ""
+                            let pid = rec[1] as? String ?? ""
+                            let dateStr: String? = rec.count >= 3 ? (rec[2] as? String) : nil
+                            entries.append((nm, pid, dateStr))
                         }
                     }
                 }
@@ -832,5 +859,19 @@ class MusicScriptService {
         }
 
         return nil
+    }
+
+    // MARK: - Date parsing helper
+
+    /// Parse AppleScript date string to Swift Date.
+    /// AppleScript format: "Saturday, January 1, 2022 at 12:00:00 PM"
+    nonisolated func parseAppleScriptDate(_ dateString: String?) -> Date? {
+        guard let dateString = dateString, !dateString.isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm:ss a"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+
+        return formatter.date(from: dateString)
     }
 }
