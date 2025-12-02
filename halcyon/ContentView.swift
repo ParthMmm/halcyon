@@ -13,6 +13,8 @@ struct ContentView: View {
     @StateObject private var viewModel: MusicLibraryViewModel
     // Inner split visibility controls the middle column (playlists)
     @State private var innerVisibility: NavigationSplitViewVisibility = .detailOnly
+    // TEMPORARY: Flag to run organization once
+    @State private var hasRunOrganization = false
 
     init() {
         _viewModel = StateObject(wrappedValue: MusicLibraryViewModel(musicService: MusicScriptService()))
@@ -30,6 +32,15 @@ struct ContentView: View {
             .onAppear {
                 viewModel.loadFolders()
                 innerVisibility = (viewModel.selectedFolder == nil) ? .detailOnly : .doubleColumn
+
+                // TEMPORARY: Run playlist organization once
+                if !hasRunOrganization {
+                    hasRunOrganization = true
+                    // Wait a bit for folders to load first
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        viewModel.organizeMonthlyPlaylists()
+                    }
+                }
             }
             .onChange(of: viewModel.selectedFolder) { oldValue, newValue in
                 withAnimation(.easeInOut(duration: 0.25)) {

@@ -173,15 +173,22 @@ class MusicScriptService {
 
                                   try
                                       set parentName to name of (parent of p)
-                                      set foundGroup to false
+                                      set foundIndex to 0
+                                      set groupIndex to 1
                                       repeat with group in folderGroups
                                           if (item 1 of group) is parentName then
-                                              set foundGroup to true
-                                              set end of (item 2 of group) to {nm, pid, dateStr}
+                                              set foundIndex to groupIndex
                                               exit repeat
                                           end if
+                                          set groupIndex to groupIndex + 1
                                       end repeat
-                                      if not foundGroup then
+                                      if foundIndex > 0 then
+                                          -- Modify existing group by index
+                                          set existingPlaylists to item 2 of item foundIndex of folderGroups
+                                          set end of existingPlaylists to {nm, pid, dateStr}
+                                          set item 2 of item foundIndex of folderGroups to existingPlaylists
+                                      else
+                                          -- Create new group
                                           set end of folderGroups to {parentName, {{nm, pid, dateStr}}}
                                       end if
                                   on error
@@ -201,7 +208,9 @@ class MusicScriptService {
          end try
          """
 
+        print("🔍 Executing getAllFoldersWithPlaylists AppleScript...")
         guard let result = executeScript(script) else {
+            print("❌ AppleScript returned nil")
             if let errorNum = (lastAppleScriptError?[NSAppleScript.errorNumber] as? NSNumber)?.intValue {
                 switch errorNum {
                 case -1743, -10004:
@@ -216,8 +225,11 @@ class MusicScriptService {
             throw MusicScriptError.scriptExecutionFailed("Could not get folders with playlists")
         }
 
+        print("✅ AppleScript result type: \(type(of: result))")
+        print("✅ AppleScript result: \(result)")
         guard let outer = result as? [[Any]], outer.count == 2 else {
-             print("Unexpected result format: \(result)")
+             print("❌ Unexpected result format: \(result)")
+             print("❌ Result type: \(type(of: result))")
             return ([], [])
         }
 

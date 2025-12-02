@@ -20,6 +20,7 @@ struct PlaylistListView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Playlist list
             if let folder = folder {
+                let _ = print("📁 PlaylistListView: Displaying folder '\(folder.name)' with \(folder.playlists.count) playlists")
                 if folder.playlists.isEmpty {
                     VStack {
                         Spacer()
@@ -72,6 +73,7 @@ struct PlaylistListView: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .frame(minWidth: 250, idealWidth: 350)
         .navigationSubtitle(folder != nil ? "\(folder!.playlists.count) playlist\(folder!.playlists.count == 1 ? "" : "s")" : "")
         .sheet(isPresented: $showCreatePlaylistSheet) {
             VStack(spacing: 20) {

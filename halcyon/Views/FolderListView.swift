@@ -88,6 +88,7 @@ struct FolderListView: View {
                   .onChange(of: sidebarSelection) { oldValue, newValue in
                       switch newValue {
                       case .folder(let folder):
+                          print("🎯 Selected folder: '\(folder.name)' with \(folder.playlists.count) playlists")
                           viewModel.selectedFolder = folder
                           viewModel.selectedPlaylist = nil
                       case .playlist(let playlist):

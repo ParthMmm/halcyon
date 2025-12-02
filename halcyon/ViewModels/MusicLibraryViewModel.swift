@@ -120,6 +120,10 @@ class MusicLibraryViewModel: ObservableObject {
                      self.rootPlaylists = builtRootPlaylists
                      self.isLoading = false
                      print("Folders and root playlists loaded successfully")
+                     print("📊 Total folders: \(builtFolders.count)")
+                     for folder in builtFolders {
+                         print("  📁 \(folder.name): \(folder.playlists.count) playlists")
+                     }
                  }
 
              } catch let error as MusicScriptError {
@@ -468,6 +472,142 @@ class MusicLibraryViewModel: ObservableObject {
                  }
              }
          }
+     }
+
+     // MARK: - One-Time Organization (TEMPORARY)
+
+     func organizeMonthlyPlaylists() {
+         print("🔄 Starting monthly playlist organization...")
+         isLoading = true
+         errorMessage = nil
+
+         Task { [weak self] in
+             guard let self else { return }
+             do {
+                 let (movedCount, skippedCount, failures) = try await performOrganization()
+
+                 DispatchQueue.main.async {
+                     self.isLoading = false
+
+                     print("✅ Organization Complete!")
+                     print("   Moved: \(movedCount) playlist\(movedCount == 1 ? "" : "s")")
+                     print("   Skipped: \(skippedCount) playlist\(skippedCount == 1 ? "" : "s")")
+
+                     if !failures.isEmpty {
+                         print("   Failures:")
+                         for (name, reason) in failures {
+                             print("      • \(name): \(reason)")
+                         }
+                     }
+
+                     // Refresh to show updated state
+                     if movedCount > 0 {
+                         self.loadFolders()
+                     }
+                 }
+             } catch let error as MusicScriptError {
+                 DispatchQueue.main.async {
+                     self.isLoading = false
+                     self.errorMessage = error.errorDescription
+                     print("❌ Organization failed: \(error.errorDescription ?? "Unknown error")")
+                 }
+             } catch {
+                 DispatchQueue.main.async {
+                     self.isLoading = false
+                     self.errorMessage = "Organization failed: \(error.localizedDescription)"
+                     print("❌ Organization failed: \(error.localizedDescription)")
+                 }
+             }
+         }
+     }
+
+     private func performOrganization() async throws -> (Int, Int, [(String, String)]) {
+         // 1. Get all root playlists
+         let playlists = rootPlaylists
+         print("📋 Processing \(playlists.count) root playlists...")
+
+         // 2. Build year folder lookup map
+         let yearFolderMap = Dictionary(
+             uniqueKeysWithValues: allFolders.map { ($0.name, $0) }
+         )
+         print("📁 Available year folders: \(yearFolderMap.keys.sorted())")
+
+         // 3. Track results
+         var movedCount = 0
+         var skippedCount = 0
+         var failures: [(String, String)] = []
+
+         // 4. Process each playlist
+         for playlist in playlists {
+             // Parse playlist name
+             guard let (monthName, yearStr) = parsePlaylistName(playlist.name) else {
+                 // Not matching pattern - skip silently
+                 continue
+             }
+
+             // Convert 2-digit year to 4-digit
+             guard let fullYear = convertTwoDigitYear(yearStr) else {
+                 skippedCount += 1
+                 failures.append((playlist.name, "Invalid year format"))
+                 print("⚠️  Skipped '\(playlist.name)': Invalid year format")
+                 continue
+             }
+
+             // Validate year is in expected range (2014-2025)
+             guard let yearInt = Int(fullYear), yearInt >= 2014 && yearInt <= 2025 else {
+                 skippedCount += 1
+                 failures.append((playlist.name, "Year \(fullYear) out of range (2014-2025)"))
+                 print("⚠️  Skipped '\(playlist.name)': Year \(fullYear) out of range")
+                 continue
+             }
+
+             // Check if year folder exists
+             guard yearFolderMap[fullYear] != nil else {
+                 skippedCount += 1
+                 failures.append((playlist.name, "Year folder '\(fullYear)' not found"))
+                 print("⚠️  Skipped '\(playlist.name)': Folder '\(fullYear)' not found")
+                 continue
+             }
+
+             // Move playlist to year folder
+             do {
+                 print("🔀 Moving '\(playlist.name)' to '\(fullYear)'...")
+                 try await musicService.movePlaylist(id: playlist.id, toFolder: fullYear)
+                 movedCount += 1
+                 print("✓  Moved '\(playlist.name)' to '\(fullYear)'")
+             } catch {
+                 skippedCount += 1
+                 failures.append((playlist.name, "Move failed: \(error.localizedDescription)"))
+                 print("✗  Failed to move '\(playlist.name)': \(error.localizedDescription)")
+             }
+
+             // Small delay to avoid overwhelming Music app
+             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+         }
+
+         return (movedCount, skippedCount, failures)
+     }
+
+     private func parsePlaylistName(_ name: String) -> (String, String)? {
+         // Regex pattern: "Month - YY"
+         let pattern = #"^([A-Za-z]+)\s*-\s*(\d{2})$"#
+         guard let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+               match.numberOfRanges == 3,
+               let monthRange = Range(match.range(at: 1), in: name),
+               let yearRange = Range(match.range(at: 2), in: name) else {
+             return nil
+         }
+         return (String(name[monthRange]), String(name[yearRange]))
+     }
+
+     private func convertTwoDigitYear(_ twoDigitYear: String) -> String? {
+         guard let year = Int(twoDigitYear), year >= 0 && year <= 99 else {
+             return nil
+         }
+         // Simple conversion: add 2000 (for years 2014-2025, this covers 00-99)
+         let fullYear = 2000 + year
+         return String(fullYear)
      }
  }
 
