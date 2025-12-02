@@ -85,7 +85,7 @@ struct FolderListView: View {
                   .listRowSeparator(.hidden)
                   .scrollContentBackground(.hidden)
                   .padding(.horizontal, -8)
-                  .onChange(of: sidebarSelection) { newValue in
+                  .onChange(of: sidebarSelection) { oldValue, newValue in
                       switch newValue {
                       case .folder(let folder):
                           viewModel.selectedFolder = folder

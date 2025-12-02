@@ -840,6 +840,22 @@ class MusicScriptService {
     private func convertDescriptor(_ descriptor: NSAppleEventDescriptor) -> Any? {
         // Handle list/array first (before checking stringValue)
         let itemCount = descriptor.numberOfItems
+
+        // Check if this is a list type (including empty lists)
+        // typeAEList = 'list' = 0x6c697374
+        if descriptor.descriptorType == typeAEList {
+            var result: [Any] = []
+            for i in 1...itemCount {
+                if let item = descriptor.atIndex(i) {
+                    if let converted = convertDescriptor(item) {
+                        result.append(converted)
+                    }
+                }
+            }
+            return result
+        }
+
+        // For non-list types with items (like records), still iterate
         if itemCount > 0 {
             var result: [Any] = []
             for i in 1...itemCount {

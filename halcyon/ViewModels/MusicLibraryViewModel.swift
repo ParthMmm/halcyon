@@ -385,7 +385,7 @@ class MusicLibraryViewModel: ObservableObject {
           errorMessage = nil
           selectedPlaylist = playlist
 
-         Task { [weak self, playlistName = playlist.name] in
+         Task { [weak self] in
              guard let self else { return }
              do {
                  print("Fetching songs from AppleScript...")

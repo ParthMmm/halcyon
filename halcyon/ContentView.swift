@@ -31,7 +31,7 @@ struct ContentView: View {
                 viewModel.loadFolders()
                 innerVisibility = (viewModel.selectedFolder == nil) ? .detailOnly : .doubleColumn
             }
-            .onChange(of: viewModel.selectedFolder) { newValue in
+            .onChange(of: viewModel.selectedFolder) { oldValue, newValue in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     innerVisibility = (newValue == nil) ? .detailOnly : .doubleColumn
                 }

@@ -42,7 +42,7 @@ struct PlaylistListView: View {
                     }
                     .listStyle(.inset)
                     .listRowSeparator(.hidden)
-                    .onChange(of: viewModel.selectedPlaylistIDs) { ids in
+                    .onChange(of: viewModel.selectedPlaylistIDs) { oldValue, ids in
                         // Load songs when exactly one playlist is selected; otherwise clear
                         if ids.count == 1, let onlyID = ids.first,
                            let pl = folder.playlists.first(where: { $0.id == onlyID }) {
@@ -51,7 +51,7 @@ struct PlaylistListView: View {
                             viewModel.clearSongs()
                         }
                     }
-                    .onChange(of: folder.id) { _ in
+                    .onChange(of: folder.id) { oldValue, newValue in
                         // Reset selection when switching folders
                         viewModel.selectedPlaylistIDs.removeAll()
                         viewModel.clearSongs()
