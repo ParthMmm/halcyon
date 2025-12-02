@@ -474,8 +474,9 @@ class MusicLibraryViewModel: ObservableObject {
          }
      }
 
-     // MARK: - One-Time Organization (TEMPORARY)
+     // MARK: - One-Time Organization (Completed - kept for reference)
 
+     /*
      func organizeMonthlyPlaylists() {
          print("🔄 Starting monthly playlist organization...")
          isLoading = true
@@ -609,6 +610,7 @@ class MusicLibraryViewModel: ObservableObject {
          let fullYear = 2000 + year
          return String(fullYear)
      }
+     */
  }
 
 // MARK: - Sort Options
